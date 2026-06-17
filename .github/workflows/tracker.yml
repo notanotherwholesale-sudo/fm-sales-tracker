@@ -9,11 +9,9 @@ on:
     - cron: "0 23 * * *"
   workflow_dispatch: {}   # adds a "Run workflow" button for manual / test runs
 
-# Allow the job to commit state back and deploy Pages.
+# Allow the job to commit the data store back to this (private) repo.
 permissions:
   contents: write
-  pages: write
-  id-token: write
 
 # Never run two pipeline jobs at once (avoids CSV write races).
 concurrency:
@@ -23,9 +21,6 @@ concurrency:
 jobs:
   track:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -54,15 +49,19 @@ jobs:
             git push
           fi
 
-      - name: Assemble Pages site
+      - name: Publish dashboard to the public Pages repo
+        env:
+          PAGES_TOKEN: ${{ secrets.PAGES_PUSH_TOKEN }}
         run: |
           mkdir -p site
           cp FM_Sales_Dashboard.html site/index.html
           cp summary.json site/summary.json
-
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
-      - id: deploy
-        uses: actions/deploy-pages@v4
+          cd site
+          git init -q && git checkout -q -B main
+          git add -A
+          git -c user.email="fm-bot@users.noreply.github.com" -c user.name="FM Sales Bot" \
+              commit -q -m "dashboard $(date -u '+%Y-%m-%d %H:%M')"
+          git push -q -f \
+            "https://x-access-token:${PAGES_TOKEN}@github.com/notanotherwholesale-sudo/fm-dashboard.git" \
+            main
+          echo "Published to https://notanotherwholesale-sudo.github.io/fm-dashboard/"

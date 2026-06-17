@@ -297,6 +297,10 @@ def dump(n):
 
 
 def run():
+    if not (os.environ.get("GMAIL_USER") and os.environ.get("GMAIL_APP_PASSWORD")):
+        print("No Gmail credentials set — skipping email ingest this run "
+              "(dashboard still rebuilds + publishes from existing data).")
+        return 0
     M = connect()
     msgs = fetch_messages(M)
     M.logout()
