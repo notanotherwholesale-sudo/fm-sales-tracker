@@ -7,36 +7,34 @@ Sale emails → Gmail label → GitHub Actions cron → parse → `fm_sales.csv`
 `build_dashboard.py` → GitHub Pages + widget feed.
 
 ## How it works
-- **`ingest.py`** logs into Gmail over IMAP, reads new emails under the `fm-sales`
-  label, parses Depop/Vinted sales into `date,time,sku,title,platform,price`,
-  dedupes (key = platform+date+title+price), and appends to `fm_sales.csv`.
+- **`ingest.py`** logs into Gmail over IMAP and searches **All Mail by sender**
+  (`sold@alerts.depop.com`, `vinted`) — no Gmail filter/label needed. It keeps only
+  genuine sales (Depop "sale confirmation", Vinted "You've sold an item"), skipping
+  offers/payouts/shipping updates, parses each into `date,time,sku,title,platform,price`,
+  and appends to `fm_sales.csv`. A **watermark** (latest recorded sale) plus
+  **SKU-aware dedupe** and processed-Message-ID tracking make every run idempotent and
+  self-catch-up after a missed day.
 - **`build_dashboard.py`** (unchanged) → `FM_Sales_Dashboard.html` + `summary.json`.
 - **`.github/workflows/tracker.yml`** runs the above 4×/day, commits the updated
   CSV back to the repo (the repo *is* the database), and deploys Pages.
 - State that survives between runs: `fm_sales.csv`, `processed_ids.json`,
   `collisions.csv` — all committed by the bot each run.
 
-## One-time setup
-### 1. Gmail app password
-Google Account → Security → enable **2-Step Verification** → **App passwords** →
-create one named "FM Tracker". Copy the 16-char code.
+## One-time setup (all done)
+1. **Gmail app password** for `francismurayclothing@gmail.com` (the inbox that
+   receives Depop/Vinted sale emails) — created under Security → App passwords.
+2. **Enable IMAP**: Gmail → Settings → Forwarding and POP/IMAP → **Enable IMAP** →
+   Save. (Gmail rejects IMAP logins until this is on.)
+3. **GitHub Actions secrets** (Settings → Secrets and variables → Actions):
+   - `GMAIL_USER` = `francismurayclothing@gmail.com`
+   - `GMAIL_APP_PASSWORD` = the 16-char app password (no spaces)
+   - `PAGES_PUSH_TOKEN` = fine-grained PAT with Contents:RW on the public
+     `fm-dashboard` repo (publishing target).
+4. **Publishing**: this private repo builds the dashboard and pushes the rendered
+   `index.html` + `summary.json` to the public `fm-dashboard` repo, which serves
+   GitHub Pages at the existing URL (no change to the widget).
 
-### 2. Gmail filter + label
-Settings → Filters → Create filter:
-`from:(depop.com OR vinted.com OR vinted.co.uk)` → Create filter →
-**Apply the label** `fm-sales` (create it). Tick "also apply to matching
-conversations" to backfill existing sale emails.
-
-### 3. GitHub repo
-Push this folder to a new repo, then:
-- **Settings → Secrets and variables → Actions** → add:
-  - `GMAIL_USER` = your Gmail address
-  - `GMAIL_APP_PASSWORD` = the 16-char app password (no spaces)
-- **Settings → Pages** → Source = **GitHub Actions**.
-
-### 4. First run
-Actions tab → **FM Sales Tracker** → **Run workflow**. Watch it parse, commit,
-and deploy. The live URL appears in the deploy step.
+Manual run anytime: Actions tab → **FM Sales Tracker** → **Run workflow**.
 
 ## Tuning the parsers
 The Depop/Vinted From-matchers are solid; the title/price/date regexes are

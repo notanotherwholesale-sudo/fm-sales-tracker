@@ -16,8 +16,14 @@ State files (committed back to the repo each run, so state survives between runs
   processed_ids.json  Gmail Message-IDs already parsed (cheap skip on re-runs)
   collisions.csv      cross-platform SKU collisions flagged for human review (§4.6)
 """
-import csv, json, os, re, sys, imaplib, email, datetime
+import csv, json, os, re, sys, imaplib, email, datetime, html
 from email.header import decode_header, make_header
+
+try:
+    from zoneinfo import ZoneInfo
+    LONDON = ZoneInfo("Europe/London")   # sale dates/times in UK local time, regardless of runner TZ
+except Exception:
+    LONDON = None
 
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(FOLDER, "fm_sales.csv")
@@ -25,9 +31,6 @@ PROCESSED_PATH = os.path.join(FOLDER, "processed_ids.json")
 COLLISIONS_PATH = os.path.join(FOLDER, "collisions.csv")
 
 IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
-# Gmail exposes a label as an IMAP folder. Set the filter in Gmail to apply this
-# label to Depop + Vinted sale emails. Override with GMAIL_LABEL if you rename it.
-LABEL = os.environ.get("GMAIL_LABEL", "fm-sales")
 FIELDS = ["date", "time", "sku", "title", "platform", "price"]
 
 # --------------------------------------------------------------------------- #
@@ -38,6 +41,12 @@ FIELDS = ["date", "time", "sku", "title", "platform", "price"]
 # Vinted email. Run `ingest.py --dump 5` (or forward samples) to finalise them.
 # Each parser returns a dict {date,time,sku,title,platform,price} or None.
 # --------------------------------------------------------------------------- #
+
+class ParseError(Exception):
+    """Raised when an email IS a sale notification but its fields can't be extracted
+    (a real problem worth flagging) — as opposed to a non-sale email, which parsers
+    skip silently by returning None."""
+
 
 def _money(s):
     """'£18.50' / '18,50 £' / 'GBP 18.5' -> 18.50 (float) or None."""
@@ -70,45 +79,36 @@ def _to_iso_date(s):
 
 
 def parse_depop(subject, body, sent_dt):
-    """Depop sale notification. Item price = the sale price (not Total)."""
-    title = None
-    m = re.search(r"(?:sold|purchased|bought)[:\s]+(.+?)(?:\n|for |£|$)", body, re.I)
-    if m:
-        title = m.group(1).strip(" .’'\"")
-    if not title:
-        m = re.search(r"^\s*(.+?)\s+(?:has been )?sold", body, re.I | re.M)
-        if m:
-            title = m.group(1).strip()
-    price = _money(_first(body, [
-        r"item price[:\s]*£?\s*([\d.,]+)",
-        r"sold for[:\s]*£?\s*([\d.,]+)",
-        r"£\s*([\d.,]+)",
-    ]))
-    date = _to_iso_date(_first(body, [r"date of sale[:\s]*([\d/]+)"])) or sent_dt.strftime("%Y-%m-%d")
-    time = _first(body, [r"time of sale[:\s]*([\d: ]+[AP]?M?)"]) or sent_dt.strftime("%H:%M")
+    """Depop 'sale confirmation' email (subject: 'Your [Evri shipping label and]
+    sale confirmation for @buyer'). Uses 'Item price' = the actual sale price.
+    Returns None for payout ('£X is about to be credited') and all other Depop mail.
+    Note: Depop truncates long titles with '...'; the leading SKU stays intact."""
+    if "sale confirmation" not in subject.lower():
+        return None  # payout / shipping-only / other Depop mail — not a sale, skip silently
+    # Title is the rest of the line after 'image'; captured independently of price
+    # because clothing items insert a 'Size:' line between the title and the £.
+    title = _first(body, [r"Order details\s+image\s+([^\n£]+)"])
+    price = _money(_first(body, [r"Item price\s*£\s*([\d.,]+)"]))
     if not title or price is None:
-        return None
-    return _row(date, time.strip(), title, "Depop", price)
+        raise ParseError("Depop sale confirmation but couldn't extract title/price")
+    title = re.sub(r"\.{2,}$", "", title.strip()).strip()   # drop trailing '...'
+    return _row(sent_dt.strftime("%Y-%m-%d"), sent_dt.strftime("%H:%M"), title, "Depop", price)
 
 
 def parse_vinted(subject, body, sent_dt):
-    """Vinted sale notification. Vinted emails carry no reliable time."""
-    title = None
-    m = re.search(r"(?:sold|bought|purchased)[:\s—-]+(.+?)(?:\n|for |£|$)", body, re.I)
-    if m:
-        title = m.group(1).strip(" .’'\"")
-    if not title:
-        m = re.search(r"^\s*(.+?)\s+(?:has been |is )?sold", body, re.I | re.M)
-        if m:
-            title = m.group(1).strip()
-    price = _money(_first(body, [
-        r"(?:you(?:'ll| will)? (?:earn|receive)|sold for|item price|price)[:\s]*£?\s*([\d.,]+)",
-        r"£\s*([\d.,]+)",
-    ]))
-    date = sent_dt.strftime("%Y-%m-%d")  # Vinted body rarely states a clean sale date
+    """Vinted sale email (subject: 'You've sold an item on Vinted').
+    Body: '<buyer> has bought  <title>  £<price>'. Full title, price = sale price.
+    Returns None for offers / order updates / 'order is completed' notifications."""
+    if "sold an item" not in subject.lower():
+        return None  # offer / order update / 'completed' / shipping label — skip silently
+    m = re.search(r"has bought\s+(.+?)\s+£\s*([\d.,]+)", body, re.S)
+    if not m:
+        raise ParseError("Vinted sold-item email but couldn't extract title/price")
+    title = re.sub(r"\s+", " ", m.group(1)).strip()
+    price = _money(m.group(2))
     if not title or price is None:
         return None
-    return _row(date, "", title, "Vinted", price)
+    return _row(sent_dt.strftime("%Y-%m-%d"), sent_dt.strftime("%H:%M"), title, "Vinted", price)
 
 
 # From-address / subject signatures -> parser. Order matters (first match wins).
@@ -142,6 +142,15 @@ def _decode(s):
         return str(make_header(decode_header(s or "")))
     except Exception:
         return s or ""
+
+
+def _clean_body(s):
+    """Strip the invisible preheader padding Depop/Vinted stuff their emails with,
+    decode HTML entities, and collapse runs of spaces — so the parsers see plain text."""
+    for ch in ("­", "͏", "‌", "​", "﻿", " ", "‎", "‏"):
+        s = s.replace(ch, " ")
+    s = html.unescape(s)
+    return re.sub(r"[ \t]+", " ", s)
 
 
 def _body_text(msg):
@@ -181,6 +190,12 @@ def _body_text(msg):
     return re.sub(r"[ \t]+", " ", html)
 
 
+# Sale notifications come from these senders. Searched directly in All Mail, so no
+# Gmail filter/label setup is required. The per-email subject check in each parser
+# separates real sales from offers / payouts / shipping updates.
+SENDERS = ["sold@alerts.depop.com", "vinted"]
+
+
 def connect():
     user = os.environ.get("GMAIL_USER")
     pw = os.environ.get("GMAIL_APP_PASSWORD")
@@ -188,23 +203,28 @@ def connect():
         sys.exit("ERROR: set GMAIL_USER and GMAIL_APP_PASSWORD (app password, not your login password).")
     M = imaplib.IMAP4_SSL(IMAP_HOST)
     M.login(user, pw)
-    typ, _ = M.select(f'"{LABEL}"', readonly=True)
+    typ, _ = M.select('"[Gmail]/All Mail"', readonly=True)
     if typ != "OK":
         M.logout()
-        sys.exit(f"ERROR: could not open Gmail label '{LABEL}'. Create the label + filter (see README).")
+        sys.exit("ERROR: could not open the Gmail mailbox (is IMAP enabled in Gmail settings?).")
     return M
 
 
-def fetch_messages(M):
-    typ, data = M.search(None, "ALL")
-    ids = data[0].split() if data and data[0] else []
-    out = []
-    for num in ids:
-        typ, raw = M.fetch(num, "(RFC822)")
-        if typ != "OK" or not raw or not raw[0]:
-            continue
-        msg = email.message_from_bytes(raw[0][1])
-        out.append(msg)
+def fetch_messages(M, since_date=None):
+    """Fetch sale-sender emails. `since_date` bounds the IMAP search server-side so we
+    never pull the whole archive — the precise watermark cut happens later per-email."""
+    crit = ["SINCE", since_date.strftime("%d-%b-%Y")] if since_date else []
+    seen, out = set(), []
+    for sender in SENDERS:
+        typ, data = M.search(None, "FROM", sender, *crit)
+        ids = data[0].split() if data and data[0] else []
+        for num in ids:
+            if num in seen:
+                continue
+            seen.add(num)
+            typ, raw = M.fetch(num, "(RFC822)")
+            if typ == "OK" and raw and raw[0]:
+                out.append(email.message_from_bytes(raw[0][1]))
     return out
 
 
@@ -220,20 +240,49 @@ def load_rows():
     return rows
 
 
+def _row_dt(date_s, time_s):
+    """A CSV row's (date,time) -> aware datetime, tolerant of '5:39 PM' / '17:39' / blank."""
+    try:
+        d = datetime.datetime.strptime((date_s or "").strip(), "%Y-%m-%d")
+    except ValueError:
+        return None
+    for fmt in ("%I:%M %p", "%H:%M"):
+        try:
+            t = datetime.datetime.strptime((time_s or "").strip(), fmt)
+            d = d.replace(hour=t.hour, minute=t.minute)
+            break
+        except ValueError:
+            continue
+    return d.replace(tzinfo=LONDON) if LONDON else d
+
+
+def watermark(rows):
+    """Latest recorded sale instant. We only ingest emails strictly newer than this,
+    so the historical CSV (built from authoritative exports) is never re-ingested as
+    truncated-title duplicates."""
+    dts = [d for d in (_row_dt(r.get("date"), r.get("time")) for r in rows) if d]
+    return max(dts) if dts else None
+
+
 def _key(r):
+    """Dedupe identity for a sale. Prefer SKU (stable) over title, because email titles
+    differ from the export titles already stored (Depop truncates; emails add words)."""
+    plat = r.get("platform", "")
+    date = r.get("date", "")
+    price = f"{float(r.get('price') or 0):.2f}"
+    sku = (r.get("sku") or "").strip()
+    if sku:
+        return (plat, date, "sku:" + sku, price)
     title = re.sub(r"\s+", " ", (r.get("title") or "").lower()).strip()
-    return (r.get("platform", ""), r.get("date", ""), title, f"{float(r.get('price') or 0):.2f}")
+    return (plat, date, title, price)
 
 
 def append_rows(existing, new_rows):
+    # Dedupe new emails against the EXISTING store only — not against each other —
+    # so genuine repeat-seller sales (same item/price/day) are each kept (§4.5),
+    # while sales already recorded from authoritative exports are never re-added.
     seen = {_key(r) for r in existing}
-    added = []
-    for r in new_rows:
-        k = _key(r)
-        if k in seen:
-            continue
-        seen.add(k)
-        added.append(r)
+    added = [r for r in new_rows if _key(r) not in seen]
     if added:
         write_header = not os.path.exists(CSV_PATH) or os.path.getsize(CSV_PATH) == 0
         with open(CSV_PATH, "a", newline="") as f:
@@ -283,13 +332,14 @@ def save_processed(ids):
 
 def dump(n):
     M = connect()
-    msgs = fetch_messages(M)[-n:]
+    since = datetime.datetime.now() - datetime.timedelta(days=21)
+    msgs = fetch_messages(M, since_date=since)[-n:]
     M.logout()
-    print(f"=== {len(msgs)} most recent emails in label '{LABEL}' ===\n")
+    print(f"=== {len(msgs)} most recent sale-sender emails (last 21 days) ===\n")
     for msg in msgs:
         frm = _decode(msg.get("From"))
         subj = _decode(msg.get("Subject"))
-        body = _body_text(msg)
+        body = _clean_body(_body_text(msg))
         print(f"FROM:    {frm}\nSUBJECT: {subj}\nDATE:    {msg.get('Date')}\nMSG-ID:  {msg.get('Message-ID')}")
         print("BODY (first 1200 chars):")
         print(re.sub(r"\n{3,}", "\n\n", body)[:1200])
@@ -301,37 +351,47 @@ def run():
         print("No Gmail credentials set — skipping email ingest this run "
               "(dashboard still rebuilds + publishes from existing data).")
         return 0
+    processed = load_processed()
+    existing = load_rows()
+    wm = watermark(existing)
+    if wm:
+        print(f"watermark: only ingesting sales after {wm:%Y-%m-%d %H:%M %Z}")
+    since = (wm - datetime.timedelta(days=1)) if wm else None
+
     M = connect()
-    msgs = fetch_messages(M)
+    msgs = fetch_messages(M, since_date=since)
     M.logout()
 
-    processed = load_processed()
-    new_rows, parsed_ids, skipped = [], set(), 0
+    new_rows, parsed_ids, skipped, pre_wm = [], set(), 0, 0
     for msg in msgs:
         mid = msg.get("Message-ID", "")
         if mid and mid in processed:
             continue
         frm = _decode(msg.get("From")).lower()
         subj = _decode(msg.get("Subject"))
-        body = _body_text(msg)
+        body = _clean_body(_body_text(msg))
         try:
             sent_dt = email.utils.parsedate_to_datetime(msg.get("Date"))
-            sent_dt = sent_dt.astimezone()  # local time
+            sent_dt = sent_dt.astimezone(LONDON) if LONDON else sent_dt.astimezone()
         except Exception:
             sent_dt = datetime.datetime.now()
+        if wm and sent_dt <= wm:
+            pre_wm += 1
+            continue
         for name, matches, parser in PARSERS:
             if matches(frm, subj):
-                row = parser(subj, body, sent_dt)
+                try:
+                    row = parser(subj, body, sent_dt)
+                except ParseError as e:
+                    skipped += 1
+                    print(f"  ! {e} — subject: {subj!r}")
+                    break
                 if row:
                     new_rows.append(row)
                     if mid:
                         parsed_ids.add(mid)
-                else:
-                    skipped += 1
-                    print(f"  ! could not parse a {name} email — subject: {subj!r}")
                 break
 
-    existing = load_rows()
     added = append_rows(existing, new_rows)
     if parsed_ids:
         save_processed(processed | parsed_ids)
