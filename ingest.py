@@ -327,6 +327,85 @@ def save_processed(ids):
 
 
 # --------------------------------------------------------------------------- #
+# Reversals (cancellations / failed-delivery returns) — remove revenue that fell through
+# --------------------------------------------------------------------------- #
+
+# Vinted's two definitive reversal phrases. (Depop sends no reversal emails.) The
+# generic "you could request a refund" delivery notice is intentionally NOT here.
+REVERSAL_PHRASES = ("sale has been cancelled", "returned to you instead")
+
+
+def scan_reversals(M, since_date=None):
+    """Find Vinted order-update emails that reverse a sale. Uses server-side TEXT
+    search so we only fetch the few matching emails, not the whole archive."""
+    crit = ["SINCE", since_date.strftime("%d-%b-%Y")] if since_date else []
+    ids = set()
+    for phrase in REVERSAL_PHRASES:
+        try:
+            typ, data = M.search(None, "FROM", "vinted", *crit, "TEXT", phrase)
+            if typ == "OK" and data and data[0]:
+                ids |= set(data[0].split())
+        except Exception:
+            pass
+    out = []
+    for num in ids:
+        typ, raw = M.fetch(num, "(RFC822)")
+        if typ != "OK" or not raw or not raw[0]:
+            continue
+        msg = email.message_from_bytes(raw[0][1])
+        body = _clean_body(_body_text(msg)).lower()
+        cancelled = "sale has been cancelled" in body
+        returned = "returned to you instead" in body and "refund" in body
+        if not (cancelled or returned):
+            continue
+        subj = _decode(msg.get("Subject"))
+        m = re.search(r"Order update for (.+)", subj)
+        item = (m.group(1).strip() if m else subj.strip())
+        try:
+            d = email.utils.parsedate_to_datetime(msg.get("Date")).astimezone(LONDON)
+            ds = d.strftime("%Y-%m-%d")
+        except Exception:
+            ds = "9999-12-31"
+        out.append({"sku": _sku_from_title(item),
+                    "title": re.sub(r"\s+", " ", item.lower()).strip(),
+                    "date": ds})
+    return out
+
+
+def remove_reversed(reversals):
+    """Drop the sale row each reversal refers to (latest Vinted sale of that item on
+    or before the reversal date). Rewrites the store. Idempotent: once a row is gone,
+    later runs find nothing to remove."""
+    if not reversals:
+        return []
+    rows = load_rows()
+    remove_idx = set()
+    for rev in reversals:
+        best = None
+        for i, r in enumerate(rows):
+            if i in remove_idx or r.get("platform") != "Vinted":
+                continue
+            rsku = (r.get("sku") or "").strip()
+            rtitle = re.sub(r"\s+", " ", (r.get("title") or "").lower()).strip()
+            match = (rev["sku"] and rsku == rev["sku"]) or \
+                    (not rev["sku"] and rtitle.startswith(rev["title"][:18]))
+            if match and r.get("date", "") <= rev["date"]:
+                if best is None or (r.get("date", ""), r.get("time", "")) > \
+                        (rows[best].get("date", ""), rows[best].get("time", "")):
+                    best = i
+        if best is not None:
+            remove_idx.add(best)
+    if remove_idx:
+        kept = [r for i, r in enumerate(rows) if i not in remove_idx]
+        with open(CSV_PATH, "w", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=FIELDS)
+            w.writeheader()
+            for r in kept:
+                w.writerow({k: r.get(k, "") for k in FIELDS})
+    return [rows[i] for i in sorted(remove_idx)]
+
+
+# --------------------------------------------------------------------------- #
 # Run modes
 # --------------------------------------------------------------------------- #
 
@@ -360,6 +439,9 @@ def run():
 
     M = connect()
     msgs = fetch_messages(M, since_date=since)
+    # Look back ~35 days for cancellations — they can land days after the sale.
+    rev_since = (wm - datetime.timedelta(days=35)) if wm else None
+    reversals = scan_reversals(M, since_date=rev_since)
     M.logout()
 
     new_rows, parsed_ids, skipped, pre_wm = [], set(), 0, 0
@@ -395,11 +477,15 @@ def run():
     added = append_rows(existing, new_rows)
     if parsed_ids:
         save_processed(processed | parsed_ids)
+    removed = remove_reversed(reversals)
+    for r in removed:
+        print(f"  - reversed (cancelled/returned): {r['date']} {r.get('time','')} "
+              f"£{r['price']} {r['title']}")
     collisions = report_collisions(load_rows())
 
     print(f"emails scanned: {len(msgs)} | parsed: {len(new_rows)} | "
-          f"new rows added: {len(added)} | unparsed: {skipped} | "
-          f"sku collisions: {len(collisions)}")
+          f"new rows added: {len(added)} | reversed/removed: {len(removed)} | "
+          f"unparsed: {skipped} | sku collisions: {len(collisions)}")
     for r in added:
         print(f"  + {r['date']} {r['time']:<8} {r['platform']:<9} £{r['price']:>6.2f}  {r['title']}")
     return len(added)

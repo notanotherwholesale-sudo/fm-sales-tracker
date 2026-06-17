@@ -49,7 +49,16 @@ Forward one real Depop and one real Vinted sale email, adjust `parse_depop` /
 `parse_vinted` in `ingest.py`, and re-run. Vinted is the known weak spot — if its
 emails don't carry the price, fall back to a manual export drop for Vinted only.
 
+## Cancellations / returns
+Each run also scans Vinted order-update emails for reversals ("This sale has been
+cancelled" / failed-delivery "returned to you instead … refund") over a 35-day
+lookback, and removes the matching sale so revenue reflects only completed sales.
+Depop sends no reversal emails. The generic "delivered — you *could* request a
+refund" notice is deliberately ignored (it isn't a reversal).
+
 ## Safety
 - Credentials live **only** in GitHub Actions secrets — never in the repo.
-- Re-runs are idempotent (sale-key dedupe + processed Message-IDs).
-- A missed day is caught up automatically — every run re-scans the whole label.
+- Re-runs are idempotent (SKU-aware sale-key dedupe + processed Message-IDs).
+- A missed day is caught up automatically — every run re-scans since the watermark.
+- June was rebuilt from authoritative platform emails (149 sales / £2,215.39):
+  Depop 68 (£937.79) + Vinted 81 (£1,277.60, 3 reversals excluded).
