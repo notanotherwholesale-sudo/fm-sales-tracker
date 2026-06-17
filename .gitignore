@@ -1,0 +1,12 @@
+# Secrets never belong in the repo — Gmail creds live in GitHub Actions secrets.
+gh_config.txt
+.gh_config
+*.local
+
+# Local build artifacts (regenerated each run; Pages serves them, no need to track)
+site/
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store

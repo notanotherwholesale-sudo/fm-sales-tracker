@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="theme-color" content="#0a0e18">
+<title>FM Sales Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg1:#0a0e18;--card:#141c2e;--card2:#1a2336;--line:#26314a;--txt:#f2f6fc;--muted:#93a1bd;
+    --depop:#ff4d5e;--vinted:#23d3bf;--accent:#8b5cf6;--cyan:#22d3ee;
+    --amber:#ffb020;--blue:#3b82f6;--purple:#8b5cf6;--up:#34d399;--down:#fb7185;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--txt);padding:22px;max-width:1200px;margin:0 auto;-webkit-font-smoothing:antialiased;
+    background:#0a0e18;
+    background-image:
+      radial-gradient(900px 520px at 82% -12%, rgba(139,92,255,.16), transparent 60%),
+      radial-gradient(760px 520px at -5% 2%, rgba(34,211,238,.10), transparent 55%),
+      linear-gradient(180deg,#0a0e18 0%,#0b1120 60%,#0a1020 100%);
+    min-height:100vh}
+  header{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;margin-bottom:6px}
+  h1{font-size:21px;font-weight:800;letter-spacing:.3px;display:flex;align-items:center;gap:10px}
+  h1 .logo{width:24px;height:24px;border-radius:8px;background:linear-gradient(135deg,#8b5cf6,#22d3ee);box-shadow:0 4px 14px rgba(139,92,255,.5)}
+  h1 .g{background:linear-gradient(90deg,#a78bfa,#22d3ee);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .legend{color:var(--muted);font-size:12.5px;margin-bottom:18px}
+  .legend .pill{display:inline-flex;align-items:center;gap:6px;margin-right:14px}
+  .dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+  /* badges */
+  .badge{width:36px;height:36px;border-radius:11px;display:inline-flex;align-items:center;justify-content:center;
+    box-shadow:0 5px 14px rgba(0,0,0,.4);flex:none}
+  .badge svg{width:19px;height:19px;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .badge.sm{width:30px;height:30px;border-radius:9px}.badge.sm svg{width:16px;height:16px}
+  .b-amber{background:linear-gradient(135deg,#ffd166,#ff8a3d)}
+  .b-blue{background:linear-gradient(135deg,#60a5fa,#2563eb)}
+  .b-purple{background:linear-gradient(135deg,#a78bfa,#7c3aed)}
+  .b-red{background:linear-gradient(135deg,#ff6b7a,#e11d48)}
+  .b-teal{background:linear-gradient(135deg,#34e0cd,#0d9488)}
+  .b-cyan{background:linear-gradient(135deg,#67e8f9,#0891b2)}
+  .b-orange{background:linear-gradient(135deg,#fdba74,#f97316)}
+  /* range picker */
+  .rangewrap{position:relative}
+  .rangebtn{background:linear-gradient(180deg,#1b2336,#161d2e);color:var(--txt);border:1px solid var(--line);border-radius:11px;
+    padding:9px 14px;font-size:13.5px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:8px;box-shadow:0 4px 14px rgba(0,0,0,.3)}
+  .rangebtn:hover{border-color:var(--accent)}
+  .rangebtn .cal{opacity:.8}
+  .panelpop{position:absolute;right:0;top:48px;z-index:50;background:#131a2b;border:1px solid var(--line);
+    border-radius:16px;padding:14px;width:310px;box-shadow:0 22px 60px rgba(0,0,0,.6)}
+  .panelpop.hidden{display:none}
+  .presets{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:12px}
+  .preset{background:#1a2336;border:1px solid var(--line);color:var(--txt);border-radius:9px;
+    padding:8px 9px;font-size:12.5px;cursor:pointer;text-align:left}
+  .preset:hover{border-color:var(--accent)}
+  .preset.active{background:linear-gradient(135deg,#8b5cf6,#6d28d9);border-color:#8b5cf6;color:#fff}
+  .custom{border-top:1px solid var(--line);padding-top:11px;font-size:12.5px;color:var(--muted)}
+  .custom .row{display:flex;align-items:center;gap:8px;margin-bottom:8px}
+  .custom input[type=date]{background:#1a2336;border:1px solid var(--line);color:var(--txt);
+    border-radius:8px;padding:6px 8px;font-size:12.5px;flex:1;color-scheme:dark}
+  .custom label{display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:10px;color:var(--txt)}
+  .applybtn{width:100%;background:linear-gradient(135deg,#8b5cf6,#22d3ee);border:none;color:#fff;border-radius:9px;padding:10px;
+    font-size:13px;font-weight:700;cursor:pointer;box-shadow:0 6px 16px rgba(139,92,255,.4)}
+  /* cards */
+  .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:13px}
+  .pcards{display:grid;grid-template-columns:repeat(3,1fr);gap:13px;margin-bottom:13px}
+  .card{background:linear-gradient(180deg,#161e31,#121a2b);border:1px solid var(--line);border-radius:16px;padding:15px 17px;
+    box-shadow:0 8px 24px rgba(0,0,0,.28)}
+  .cardhead{display:flex;align-items:center;gap:11px;margin-bottom:11px}
+  .lbl{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-weight:600;display:flex;align-items:center;gap:7px}
+  .big{font-size:28px;font-weight:800;margin:2px 0 2px;letter-spacing:.2px}
+  .sub{font-size:12.5px;color:var(--muted)}
+  .delta{font-size:12px;font-weight:700;padding:1px 7px;border-radius:20px}
+  .delta.up{color:var(--up);background:rgba(52,211,153,.14)}
+  .delta.down{color:var(--down);background:rgba(251,113,133,.14)}
+  .delta.flat{color:var(--muted);background:rgba(147,161,189,.14)}
+  .delta.hide{display:none}
+  /* listings */
+  .listings{background:linear-gradient(180deg,#161e31,#121a2b);border:1px solid var(--line);border-radius:16px;padding:13px 17px;margin-bottom:13px;
+    display:flex;align-items:center;gap:20px;flex-wrap:wrap;box-shadow:0 8px 24px rgba(0,0,0,.28)}
+  .listings .t{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);font-weight:600}
+  .listings .it{font-size:14px;color:var(--muted)}.listings .it b{font-size:18px;font-weight:800;color:var(--txt);margin-left:3px}
+  .listings .cap{margin-left:auto;font-size:11px;color:var(--muted)}
+  /* charts + table */
+  .grid2{display:grid;grid-template-columns:1.6fr 1fr;gap:13px;margin-bottom:13px}
+  .panel{background:linear-gradient(180deg,#161e31,#121a2b);border:1px solid var(--line);border-radius:16px;padding:15px 17px;box-shadow:0 8px 24px rgba(0,0,0,.28)}
+  .panel h2{font-size:12.5px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:13px;font-weight:700;display:flex;align-items:center;gap:9px}
+  canvas{max-height:270px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 8px;border-bottom:1px solid var(--line)}
+  th{color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  td.r,th.r{text-align:right}
+  .tag{display:inline-block;padding:2px 10px;border-radius:20px;font-size:11px;font-weight:700}
+  .tag.Depop{background:rgba(255,77,94,.16);color:#ff8a96}
+  .tag.Vinted{background:rgba(35,211,191,.16);color:#5fe6d6}
+  .tag.Wholesale{background:rgba(249,115,22,.16);color:#fb9a4b}
+  .empty{color:var(--muted);font-size:13px;text-align:center;padding:26px}
+  .foot{color:var(--muted);font-size:12px;margin-top:16px;line-height:1.6}
+  @media(max-width:860px){.kpis{grid-template-columns:1fr}.pcards{grid-template-columns:1fr}.grid2{grid-template-columns:1fr}
+    body{padding:14px}
+    .panelpop{width:90vw;position:fixed;top:74px;left:50%;right:auto;transform:translateX(-50%);max-height:78vh;overflow:auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="logo"></span>FM <span class="g">Sales Dashboard</span></h1>
+  <div class="rangewrap">
+    <button id="rangeBtn" class="rangebtn"><span class="cal">&#128197;</span><span id="rangeLabel">Today</span> &#9662;</button>
+    <div id="rangePanel" class="panelpop hidden">
+      <div class="presets" id="presets"></div>
+      <div class="custom">
+        <div class="row"><span>From</span><input type="date" id="cFrom"></div>
+        <div class="row"><span>To</span><input type="date" id="cTo"></div>
+        <label><input type="checkbox" id="cmp"> Compare to previous period</label>
+        <button class="applybtn" id="applyBtn">Apply</button>
+      </div>
+    </div>
+  </div>
+</header>
+<div class="legend">
+  Depop &amp; Vinted &middot; auto-generated from Crosslist
+  <span class="pill"><span class="dot" style="background:var(--depop)"></span>Depop</span>
+  <span class="pill"><span class="dot" style="background:var(--vinted)"></span>Vinted</span>
+  <span class="pill"><span class="dot" style="background:#f97316"></span>Wholesale</span>
+</div>
+
+<div class="kpis">
+  <div class="card">
+    <div class="cardhead"><span class="badge b-amber"><svg viewBox="0 0 24 24"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="2.5"/><path d="M6 12h.01"/><path d="M18 12h.01"/></svg></span><span class="lbl">Revenue <span id="dRev" class="delta hide"></span></span></div>
+    <div class="big" id="kRev">&pound;0.00</div><div class="sub" id="sRev">in range</div>
+  </div>
+  <div class="card">
+    <div class="cardhead"><span class="badge b-blue"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></span><span class="lbl">Units sold <span id="dU" class="delta hide"></span></span></div>
+    <div class="big" id="kU">0</div><div class="sub" id="sU">in range</div>
+  </div>
+  <div class="card">
+    <div class="cardhead"><span class="badge b-purple"><svg viewBox="0 0 24 24"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg></span><span class="lbl">Avg sale <span id="dA" class="delta hide"></span></span></div>
+    <div class="big" id="kA">&pound;0.00</div><div class="sub">per item</div>
+  </div>
+</div>
+
+<div class="pcards">
+  <div class="card">
+    <div class="cardhead"><span class="badge b-red"><svg viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2.7 12.7A2 2 0 0 1 2 11.3V4a2 2 0 0 1 2-2h7.3a2 2 0 0 1 1.4.6l7.9 7.9a2 2 0 0 1 0 2.9Z"/><circle cx="7.5" cy="7.5" r="1.6"/></svg></span><span class="lbl">Depop <span id="dDep" class="delta hide"></span></span></div>
+    <div class="big" id="kDepRev">&pound;0.00</div><div class="sub" id="kDepU">0 units</div>
+  </div>
+  <div class="card">
+    <div class="cardhead"><span class="badge b-teal"><svg viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2.7 12.7A2 2 0 0 1 2 11.3V4a2 2 0 0 1 2-2h7.3a2 2 0 0 1 1.4.6l7.9 7.9a2 2 0 0 1 0 2.9Z"/><circle cx="7.5" cy="7.5" r="1.6"/></svg></span><span class="lbl">Vinted <span id="dVin" class="delta hide"></span></span></div>
+    <div class="big" id="kVinRev">&pound;0.00</div><div class="sub" id="kVinU">0 units</div>
+  </div>
+  <div class="card">
+    <div class="cardhead"><span class="badge b-orange"><svg viewBox="0 0 24 24"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="lbl">Wholesale <span id="dWh" class="delta hide"></span></span></div>
+    <div class="big" id="kWhRev">&pound;0.00</div><div class="sub" id="kWhU">0 units</div>
+  </div>
+</div>
+
+<div class="listings">
+  <span class="badge sm b-cyan"><svg viewBox="0 0 24 24"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L2.7 12.7A2 2 0 0 1 2 11.3V4a2 2 0 0 1 2-2h7.3a2 2 0 0 1 1.4.6l7.9 7.9a2 2 0 0 1 0 2.9Z"/><circle cx="7.5" cy="7.5" r="1.6"/></svg></span>
+  <span class="t">Live listings</span>
+  <span class="it"><span class="dot" style="background:var(--depop)"></span> Depop <b id="lDep">&mdash;</b></span>
+  <span class="it"><span class="dot" style="background:var(--vinted)"></span> Vinted <b id="lVin">&mdash;</b></span>
+  <span class="it">Total <b id="lTot">&mdash;</b></span>
+  <span class="cap" id="lCap"></span>
+</div>
+
+<div class="grid2">
+  <div class="panel"><h2 id="tsTitle">Revenue over time</h2><canvas id="tsChart"></canvas></div>
+  <div class="panel"><h2>Platform split</h2><canvas id="splitChart"></canvas></div>
+</div>
+
+<div class="panel" style="margin-bottom:13px">
+  <h2 id="tblTitle">Sales in range</h2>
+  <div style="max-height:330px;overflow:auto">
+    <table id="salesTbl"><thead><tr><th>Date</th><th>Time</th><th>Item</th><th>Platform</th><th class="r">Price</th></tr></thead><tbody></tbody></table>
+  </div>
+</div>
+
+<div class="foot" id="foot"></div>
+
+<script>
+const SALES = [{"date": "2026-06-01", "time": "9:08 AM", "sku": "398", "title": "398 Vintage Trucker Hat", "platform": "Depop", "price": 8.0}, {"date": "2026-06-01", "time": "", "sku": "967", "title": "967 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 21.0}, {"date": "2026-06-01", "time": "", "sku": "", "title": "Vintage Greenpeace T-Shirt", "platform": "Vinted", "price": 25.0}, {"date": "2026-06-02", "time": "11:02 PM", "sku": "777", "title": "777 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 20.0}, {"date": "2026-06-02", "time": "11:02 PM", "sku": "977", "title": "977 Team Real Tree Camo Trucker Hat", "platform": "Depop", "price": 16.0}, {"date": "2026-06-02", "time": "12:07 PM", "sku": "", "title": "Real Tree Sling Side Bag", "platform": "Depop", "price": 5.0}, {"date": "2026-06-03", "time": "11:17 AM", "sku": "1129", "title": "1129 Vintage Golf Trucker Hat", "platform": "Depop", "price": 19.0}, {"date": "2026-06-03", "time": "11:10 AM", "sku": "1141", "title": "1141 Vintage IBA Trucker Hat", "platform": "Depop", "price": 10.2}, {"date": "2026-06-03", "time": "9:23 PM", "sku": "1158", "title": "1158 Columbia Camo Baseball Hat", "platform": "Depop", "price": 20.0}, {"date": "2026-06-03", "time": "4:55 PM", "sku": "1160", "title": "1160 Vintage Trucker Hat", "platform": "Depop", "price": 13.0}, {"date": "2026-06-03", "time": "4:55 PM", "sku": "", "title": "Vintage MLB T-Shirt", "platform": "Depop", "price": 22.0}, {"date": "2026-06-03", "time": "", "sku": "1002", "title": "1002 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 8.0}, {"date": "2026-06-03", "time": "", "sku": "1005", "title": "1005 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 20.0}, {"date": "2026-06-03", "time": "", "sku": "1023", "title": "1023 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 18.0}, {"date": "2026-06-03", "time": "", "sku": "1049", "title": "1049 Racing Trucker Hat", "platform": "Vinted", "price": 13.0}, {"date": "2026-06-03", "time": "", "sku": "1060", "title": "1060 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 14.0}, {"date": "2026-06-03", "time": "", "sku": "747", "title": "747 Vintage Trucker Visor Hat", "platform": "Vinted", "price": 8.5}, {"date": "2026-06-03", "time": "", "sku": "819", "title": "819 Dr Pepper Trucker Hat", "platform": "Vinted", "price": 14.0}, {"date": "2026-06-03", "time": "", "sku": "949", "title": "949 GMC Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-03", "time": "", "sku": "963", "title": "963 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 19.0}, {"date": "2026-06-04", "time": "8:28 PM", "sku": "658", "title": "658 Vintage Trucker Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-04", "time": "6:56 PM", "sku": "935", "title": "935 Vintage Trucker Hat", "platform": "Depop", "price": 9.6}, {"date": "2026-06-04", "time": "4:58 PM", "sku": "972", "title": "972 Vintage Trucker Hat", "platform": "Depop", "price": 15.0}, {"date": "2026-06-04", "time": "3:12 PM", "sku": "", "title": "Real Tree Sling Side Bag", "platform": "Depop", "price": 7.19}, {"date": "2026-06-04", "time": "5:34 PM", "sku": "", "title": "Real Tree Sling Side Bag", "platform": "Depop", "price": 5.0}, {"date": "2026-06-04", "time": "6:05 PM", "sku": "", "title": "Vintage Levis Denim Shirt", "platform": "Depop", "price": 15.0}, {"date": "2026-06-04", "time": "10:53 PM", "sku": "", "title": "Vintage Russell Athletic Sweatshirt", "platform": "Depop", "price": 22.4}, {"date": "2026-06-04", "time": "", "sku": "1041", "title": "1041 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 14.0}, {"date": "2026-06-04", "time": "", "sku": "1055", "title": "1055 Vintage Trucker Hat", "platform": "Vinted", "price": 16.0}, {"date": "2026-06-04", "time": "", "sku": "1101", "title": "1101 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 13.6}, {"date": "2026-06-04", "time": "", "sku": "913", "title": "913 Vintage Trucker Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-04", "time": "", "sku": "", "title": "Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 14.0}, {"date": "2026-06-04", "time": "", "sku": "", "title": "Vintage Grateful Dead T-Shirt", "platform": "Vinted", "price": 18.0}, {"date": "2026-06-05", "time": "1:33 PM", "sku": "1060", "title": "1060 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-05", "time": "8:16 AM", "sku": "1124", "title": "1124 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 14.8}, {"date": "2026-06-05", "time": "7:10 AM", "sku": "1126", "title": "1126 Vintage Tabasco Trucker Hat", "platform": "Depop", "price": 25.0}, {"date": "2026-06-05", "time": "10:44 PM", "sku": "1134", "title": "1134 Real Tree Baseball Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-05", "time": "1:52 AM", "sku": "", "title": "Polo Ralph Lauren Hoodie", "platform": "Depop", "price": 40.0}, {"date": "2026-06-05", "time": "", "sku": "1015", "title": "1015 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 17.0}, {"date": "2026-06-05", "time": "", "sku": "146", "title": "146 Vintage Trucker Hat", "platform": "Vinted", "price": 17.0}, {"date": "2026-06-05", "time": "", "sku": "157", "title": "157 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 13.0}, {"date": "2026-06-05", "time": "", "sku": "605", "title": "605 Hooters Baseball Hat", "platform": "Vinted", "price": 13.0}, {"date": "2026-06-05", "time": "", "sku": "985", "title": "985 Racing Baseball Hat", "platform": "Vinted", "price": 8.0}, {"date": "2026-06-05", "time": "", "sku": "989", "title": "989 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 7.5}, {"date": "2026-06-05", "time": "", "sku": "", "title": "Breitling Baseball Hat", "platform": "Vinted", "price": 20.0}, {"date": "2026-06-05", "time": "", "sku": "", "title": "Vintage Sergio Tacchini Track Jacket", "platform": "Vinted", "price": 20.0}, {"date": "2026-06-06", "time": "7:29 PM", "sku": "1116", "title": "1116 Vintage Trucker Hat", "platform": "Depop", "price": 19.0}, {"date": "2026-06-06", "time": "", "sku": "952", "title": "952 Fila Baseball Hat", "platform": "Vinted", "price": 7.5}, {"date": "2026-06-07", "time": "8:28 AM", "sku": "1052", "title": "1052 Vintage Trucker Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-07", "time": "2:20 AM", "sku": "1077", "title": "1077 NASCAR Racing Baseball Hat", "platform": "Depop", "price": 11.2}, {"date": "2026-06-07", "time": "9:11 AM", "sku": "1139", "title": "1139 Vintage Jamaica Trucker Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-07", "time": "9:04 PM", "sku": "396", "title": "396 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 14.4}, {"date": "2026-06-07", "time": "2:20 AM", "sku": "531", "title": "531 NBA Nike Baseball Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-07", "time": "", "sku": "1024", "title": "1024 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-07", "time": "", "sku": "1135", "title": "1135 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 17.0}, {"date": "2026-06-07", "time": "", "sku": "541", "title": "541 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-07", "time": "", "sku": "598", "title": "598 Vintage Tennis Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-07", "time": "", "sku": "998", "title": "998 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 22.0}, {"date": "2026-06-07", "time": "", "sku": "", "title": "Toyota Racing Baseball Hat", "platform": "Vinted", "price": 11.0}, {"date": "2026-06-08", "time": "7:32 AM", "sku": "1128", "title": "1128 Vintage Trucker Hat", "platform": "Depop", "price": 16.0}, {"date": "2026-06-08", "time": "12:06 PM", "sku": "1161", "title": "1161 Vintage Trucker Hat", "platform": "Depop", "price": 17.0}, {"date": "2026-06-08", "time": "9:41 PM", "sku": "", "title": "Vintage Eagles T-Shirt", "platform": "Depop", "price": 15.0}, {"date": "2026-06-08", "time": "", "sku": "1007", "title": "1007 Vintage Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-08", "time": "", "sku": "1122", "title": "1122 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 10.0}, {"date": "2026-06-08", "time": "", "sku": "1134", "title": "1134 Real Tree Baseball Hat", "platform": "Vinted", "price": 16.0}, {"date": "2026-06-09", "time": "6:03 PM", "sku": "1136", "title": "1136 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-09", "time": "10:27 PM", "sku": "558", "title": "558 Army Marine Baseball Hat", "platform": "Depop", "price": 14.4}, {"date": "2026-06-09", "time": "11:57 PM", "sku": "", "title": "Vintage Nike Town T-Shirt", "platform": "Depop", "price": 28.0}, {"date": "2026-06-09", "time": "", "sku": "1061", "title": "1061 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 10.0}, {"date": "2026-06-09", "time": "", "sku": "635", "title": "635 Vintage UPS Trucker Hat", "platform": "Vinted", "price": 7.2}, {"date": "2026-06-10", "time": "9:21 AM", "sku": "1103", "title": "1103 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 9.0}, {"date": "2026-06-10", "time": "9:09 AM", "sku": "1104", "title": "1104 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 13.6}, {"date": "2026-06-10", "time": "6:01 PM", "sku": "1170", "title": "1170 Vintage Trucker Hat", "platform": "Depop", "price": 13.0}, {"date": "2026-06-10", "time": "8:53 AM", "sku": "1275", "title": "1275 Claywell Licht Fishing Team Baseball Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-10", "time": "", "sku": "1099", "title": "1099 Vintage Trucker Hat", "platform": "Vinted", "price": 17.5}, {"date": "2026-06-10", "time": "", "sku": "979", "title": "979 Vintage Trucker Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-11", "time": "9:54 PM", "sku": "1028", "title": "1028 Vintage Coast Guard Baseball Hat", "platform": "Depop", "price": 9.6}, {"date": "2026-06-11", "time": "8:21 PM", "sku": "1043", "title": "1043 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 12.8}, {"date": "2026-06-11", "time": "4:58 PM", "sku": "1075", "title": "1075 Vintage Poker Trucker Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-11", "time": "11:23 AM", "sku": "1206", "title": "1206 Anderson's Honda Trucker Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-11", "time": "8:18 PM", "sku": "1233", "title": "1233 Machines Trucker Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-11", "time": "12:13 PM", "sku": "1279", "title": "1279 NBA New York Knicks Baseball Hat", "platform": "Depop", "price": 22.0}, {"date": "2026-06-11", "time": "8:17 PM", "sku": "883", "title": "883 Real Tree Camo Trucker Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-11", "time": "9:54 PM", "sku": "", "title": "New England Patriots Baseball Hat", "platform": "Depop", "price": 5.4}, {"date": "2026-06-11", "time": "8:16 PM", "sku": "", "title": "Seattle Marines Baseball Hat", "platform": "Depop", "price": 7.0}, {"date": "2026-06-11", "time": "", "sku": "1066", "title": "1066 Ford Racing Baseball Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-11", "time": "", "sku": "1087", "title": "1087 Vintage Trucker Hat", "platform": "Vinted", "price": 19.0}, {"date": "2026-06-11", "time": "", "sku": "1147", "title": "1147 Vintage World Cup Baseball Hat", "platform": "Vinted", "price": 18.0}, {"date": "2026-06-11", "time": "", "sku": "1157", "title": "1157 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-11", "time": "", "sku": "393", "title": "393 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-11", "time": "", "sku": "525", "title": "525 Vintage BMW Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-11", "time": "", "sku": "", "title": "Vintage Fireman's Coat", "platform": "Vinted", "price": 35.0}, {"date": "2026-06-11", "time": "", "sku": "", "title": "Vintage French Work Shirt", "platform": "Vinted", "price": 30.0}, {"date": "2026-06-12", "time": "11:35 PM", "sku": "1138", "title": "1138 Vintage NYC Trucker Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-12", "time": "5:17 PM", "sku": "1225", "title": "1225 Realtree Hardwoods Camo Trucker Hat", "platform": "Depop", "price": 13.0}, {"date": "2026-06-12", "time": "7:21 PM", "sku": "1229", "title": "1229 Chevrolet Realtree Camo Baseball Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-12", "time": "7:17 PM", "sku": "1238", "title": "1238 Titleist Golf Baseball Hat", "platform": "Depop", "price": 8.0}, {"date": "2026-06-12", "time": "6:46 AM", "sku": "1313", "title": "1313 NFL Buffalo Bills Baseball Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-12", "time": "1:49 PM", "sku": "779", "title": "779 New York Islanders Baseball Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-12", "time": "5:14 PM", "sku": "", "title": "Real Tree Native Pride America Baseball Cap American USA 90s Vintage Hat", "platform": "Depop", "price": 9.0}, {"date": "2026-06-12", "time": "11:18 AM", "sku": "", "title": "Vintage Denim Jacket", "platform": "Depop", "price": 17.0}, {"date": "2026-06-12", "time": "", "sku": "1091", "title": "1091 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 13.0}, {"date": "2026-06-12", "time": "", "sku": "1131", "title": "1131 Vintage Racing Trucker Hat", "platform": "Vinted", "price": 17.0}, {"date": "2026-06-12", "time": "", "sku": "1140", "title": "1140 Vintage New Mexico Trucker Hat", "platform": "Vinted", "price": 10.0}, {"date": "2026-06-12", "time": "", "sku": "1154", "title": "1154 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-12", "time": "", "sku": "1162", "title": "1162 Vintage Trucker Hat", "platform": "Vinted", "price": 11.0}, {"date": "2026-06-12", "time": "", "sku": "", "title": "Vintage Army T-Shirt", "platform": "Vinted", "price": 10.5}, {"date": "2026-06-12", "time": "", "sku": "", "title": "Vintage Trucker Hat", "platform": "Vinted", "price": 50.0}, {"date": "2026-06-13", "time": "8:28 PM", "sku": "1251", "title": "1251 Oakley Stealth Baseball Hat", "platform": "Depop", "price": 14.0}, {"date": "2026-06-13", "time": "2:26 PM", "sku": "1280", "title": "1280 St\u00fcssy Baseball Hat", "platform": "Depop", "price": 12.0}, {"date": "2026-06-13", "time": "8:14 PM", "sku": "", "title": "Real Tree Camo Trucker Hat", "platform": "Depop", "price": 6.0}, {"date": "2026-06-13", "time": "", "sku": "1159", "title": "1159 Vintage Trucker Hat", "platform": "Vinted", "price": 13.0}, {"date": "2026-06-13", "time": "", "sku": "", "title": "Carhartt Gilet Jacket", "platform": "Vinted", "price": 44.0}, {"date": "2026-06-13", "time": "", "sku": "", "title": "Vintage Wrangler T-Shirt", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-14", "time": "12:27 PM", "sku": "", "title": "NASCAR Rain Jacket", "platform": "Depop", "price": 20.0}, {"date": "2026-06-14", "time": "10:24 PM", "sku": "", "title": "Vintage Denim Jacket", "platform": "Depop", "price": 16.0}, {"date": "2026-06-14", "time": "6:54 PM", "sku": "", "title": "Vintage Golf Jumper", "platform": "Depop", "price": 15.0}, {"date": "2026-06-14", "time": "", "sku": "1062", "title": "1062 San Francisco Giants Baseball Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-14", "time": "", "sku": "1081", "title": "1081 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 14.9}, {"date": "2026-06-14", "time": "", "sku": "1125", "title": "1125 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 12.0}, {"date": "2026-06-14", "time": "", "sku": "1181", "title": "1181 Real Tree Camo Baseball Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-14", "time": "", "sku": "1228", "title": "1228 Detroit Tigers Camo Baseball Hat", "platform": "Vinted", "price": 13.5}, {"date": "2026-06-14", "time": "", "sku": "293", "title": "293 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 15.0}, {"date": "2026-06-14", "time": "", "sku": "748", "title": "748 Vintage Western Trucker Hat", "platform": "Vinted", "price": 12.6}, {"date": "2026-06-14", "time": "", "sku": "813", "title": "813 WWE John Cena Baseball Hat", "platform": "Vinted", "price": 9.5}, {"date": "2026-06-14", "time": "", "sku": "892", "title": "892 Real Tree Camo Trucker Hat", "platform": "Vinted", "price": 14.0}, {"date": "2026-06-14", "time": "", "sku": "", "title": "Vintage Trucker Hat", "platform": "Vinted", "price": 13.5}, {"date": "2026-06-15", "time": "12:47 PM", "sku": "1316", "title": "1316 Nike Baseball Hat", "platform": "Depop", "price": 8.0}, {"date": "2026-06-15", "time": "4:33 PM", "sku": "828", "title": "828 Vintage Trucker Hat", "platform": "Depop", "price": 10.0}, {"date": "2026-06-15", "time": "5:39 PM", "sku": "963", "title": "963 Real Tree Camo Baseball Hat", "platform": "Depop", "price": 15.2}, {"date": "2026-06-15", "time": "4:57 PM", "sku": "", "title": "Real Tree Sling Side Bag", "platform": "Depop", "price": 6.0}, {"date": "2026-06-15", "time": "", "sku": "566", "title": "566 Baltimore Ravens Baseball Hat", "platform": "Vinted", "price": 10.0}];
+const LISTINGS = {"total": 3029, "depopLive": null, "vintedLive": null, "capturedAt": null};
+const GENERATED_AT = "17 Jun 2026, 23:22";
+
+const DEPOP="#ff4d5e", VINTED="#23d3bf", WHOLE="#f97316";
+const TICK="#93a1bd", GRID="#26314a", CARDBG="#141c2e";
+const gbp = n => "£" + (n||0).toLocaleString("en-GB",{minimumFractionDigits:2,maximumFractionDigits:2});
+const pd = s => { const [y,m,d]=s.split("-").map(Number); return new Date(y,m-1,d); };
+const addDays=(d,n)=>{const x=new Date(d);x.setDate(x.getDate()+n);return x;};
+const dayMs=86400000;
+const today=new Date(); today.setHours(0,0,0,0);
+const monday=d=>{const x=new Date(d);x.setHours(0,0,0,0);const wd=(x.getDay()+6)%7;x.setDate(x.getDate()-wd);return x;};
+const som=d=>new Date(d.getFullYear(),d.getMonth(),1);
+const soy=d=>new Date(d.getFullYear(),0,1);
+const minSale=SALES.length?SALES.reduce((a,s)=>{const d=pd(s.date);return d<a?d:a;},pd(SALES[0].date)):today;
+const fmtShort=d=>d.toLocaleDateString("en-GB",{day:"numeric",month:"short"});
+const fmtFull=d=>d.toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric"});
+const iso=d=>d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+
+const PRESETS=[
+  ["Today",()=>[today,today]],
+  ["Yesterday",()=>[addDays(today,-1),addDays(today,-1)]],
+  ["Last 7 days",()=>[addDays(today,-6),today]],
+  ["Last 30 days",()=>[addDays(today,-29),today]],
+  ["Last 90 days",()=>[addDays(today,-89),today]],
+  ["Week to date",()=>[monday(today),today]],
+  ["Month to date",()=>[som(today),today]],
+  ["Last month",()=>{const f=new Date(today.getFullYear(),today.getMonth()-1,1);const l=new Date(today.getFullYear(),today.getMonth(),0);return [f,l];}],
+  ["Year to date",()=>[soy(today),today]],
+  ["All time",()=>[minSale,today]],
+];
+
+let state={start:today,end:today,label:"Today",compare:false};
+
+function aggregate(start,end){
+  let rev=0,u=0,dR=0,dU=0,vR=0,vU=0,wR=0,wU=0;
+  for(const s of SALES){const d=pd(s.date); if(d<start||d>end) continue;
+    rev+=s.price;u++;
+    if(s.platform==="Depop"){dR+=s.price;dU++;}
+    else if(s.platform==="Wholesale"){wR+=s.price;wU++;}
+    else {vR+=s.price;vU++;}}
+  return {rev,u,dR,dU,vR,vU,wR,wU,avg:u?rev/u:0};
+}
+function setDelta(el,cur,prev){
+  if(!state.compare){el.className="delta hide";return;}
+  el.className="delta";
+  if(prev===0){ if(cur===0){el.classList.add("flat");el.textContent="0%";} else {el.classList.add("up");el.textContent="▲ new";} return;}
+  const p=(cur-prev)/prev*100; const r=Math.abs(p)<0.05;
+  el.classList.add(r?"flat":(p>0?"up":"down"));
+  el.textContent=(r?"":(p>0?"▲ ":"▼ "))+Math.abs(p).toFixed(1)+"%";
+}
+
+let tsChart,splitChart;
+function buckets(start,end){
+  const span=Math.round((end-start)/dayMs)+1; let unit,labels=[],keys=[];
+  if(span<=31){unit="day"; for(let d=new Date(start);d<=end;d=addDays(d,1)){labels.push(fmtShort(d));keys.push([new Date(d),new Date(d)]);}}
+  else if(span<=182){unit="week"; for(let d=monday(start);d<=end;d=addDays(d,7)){labels.push(fmtShort(d));keys.push([new Date(d),addDays(d,6)]);}}
+  else{unit="month"; let d=som(start); while(d<=end){const e=new Date(d.getFullYear(),d.getMonth()+1,0);labels.push(d.toLocaleDateString("en-GB",{month:"short",year:"2-digit"}));keys.push([new Date(d),e]);d=new Date(d.getFullYear(),d.getMonth()+1,1);}}
+  const dep=keys.map(()=>0),vin=keys.map(()=>0),whole=keys.map(()=>0);
+  for(const s of SALES){const sd=pd(s.date); if(sd<start||sd>end) continue;
+    for(let i=0;i<keys.length;i++){if(sd>=keys[i][0]&&sd<=keys[i][1]){if(s.platform==="Depop")dep[i]+=s.price;else if(s.platform==="Wholesale")whole[i]+=s.price;else vin[i]+=s.price;break;}}}
+  return {unit,labels,dep,vin,whole};
+}
+function render(){
+  const cur=aggregate(state.start,state.end);
+  const span=Math.round((state.end-state.start)/dayMs)+1;
+  const pe=addDays(state.start,-1), ps=addDays(pe,-(span-1));
+  const prev=aggregate(ps,pe);
+  document.getElementById("kRev").textContent=gbp(cur.rev);
+  document.getElementById("kU").textContent=cur.u;
+  document.getElementById("kA").textContent=gbp(cur.avg);
+  document.getElementById("kDepRev").textContent=gbp(cur.dR);
+  document.getElementById("kDepU").textContent=cur.dU+" unit"+(cur.dU===1?"":"s");
+  document.getElementById("kVinRev").textContent=gbp(cur.vR);
+  document.getElementById("kVinU").textContent=cur.vU+" unit"+(cur.vU===1?"":"s");
+  document.getElementById("kWhRev").textContent=gbp(cur.wR);
+  document.getElementById("kWhU").textContent=cur.wU+" unit"+(cur.wU===1?"":"s");
+  const sub = state.compare ? ("vs "+gbp(prev.rev)+" prev") : ("in "+state.label.toLowerCase());
+  document.getElementById("sRev").textContent=sub;
+  document.getElementById("sU").textContent=state.compare?("vs "+prev.u+" prev"):("in "+state.label.toLowerCase());
+  setDelta(document.getElementById("dRev"),cur.rev,prev.rev);
+  setDelta(document.getElementById("dU"),cur.u,prev.u);
+  setDelta(document.getElementById("dA"),cur.avg,prev.avg);
+  setDelta(document.getElementById("dDep"),cur.dR,prev.dR);
+  setDelta(document.getElementById("dVin"),cur.vR,prev.vR);
+  setDelta(document.getElementById("dWh"),cur.wR,prev.wR);
+
+  const b=buckets(state.start,state.end);
+  document.getElementById("tsTitle").textContent="Revenue over time · by "+b.unit;
+  if(!tsChart){
+    tsChart=new Chart(document.getElementById("tsChart"),{type:"bar",
+      data:{labels:b.labels,datasets:[{label:"Depop",data:b.dep,backgroundColor:DEPOP,stack:"s",borderRadius:4},{label:"Vinted",data:b.vin,backgroundColor:VINTED,stack:"s",borderRadius:4},{label:"Wholesale",data:b.whole,backgroundColor:WHOLE,stack:"s",borderRadius:4}]},
+      options:{responsive:true,plugins:{legend:{labels:{color:TICK}}},
+        scales:{x:{stacked:true,ticks:{color:TICK,maxRotation:0,autoSkip:true,maxTicksLimit:12},grid:{display:false}},
+          y:{stacked:true,ticks:{color:TICK,callback:v=>"£"+v},grid:{color:GRID}}}}});
+  } else { tsChart.data.labels=b.labels; tsChart.data.datasets[0].data=b.dep; tsChart.data.datasets[1].data=b.vin; tsChart.data.datasets[2].data=b.whole; tsChart.update(); }
+
+  if(!splitChart){
+    splitChart=new Chart(document.getElementById("splitChart"),{type:"doughnut",
+      data:{labels:["Depop","Vinted","Wholesale"],datasets:[{data:[cur.dR,cur.vR,cur.wR],backgroundColor:[DEPOP,VINTED,WHOLE],borderColor:CARDBG,borderWidth:3}]},
+      options:{responsive:true,cutout:"64%",plugins:{legend:{position:"bottom",labels:{color:TICK,padding:16}}}}});
+  } else { splitChart.data.datasets[0].data=[cur.dR,cur.vR,cur.wR]; splitChart.update(); }
+
+  const rows=SALES.filter(s=>{const d=pd(s.date);return d>=state.start&&d<=state.end;})
+    .sort((a,b)=>(b.date+b.time).localeCompare(a.date+a.time));
+  const tb=document.querySelector("#salesTbl tbody");
+  document.getElementById("tblTitle").textContent="Sales in range ("+rows.length+")";
+  tb.innerHTML = rows.length? rows.map(s=>`<tr><td>${pd(s.date).toLocaleDateString("en-GB",{day:"2-digit",month:"2-digit",year:"2-digit"})}</td><td>${s.time}</td><td>${s.title||s.sku}</td><td><span class="tag ${s.platform}">${s.platform}</span></td><td class="r">${gbp(s.price)}</td></tr>`).join("")
+    : `<tr><td colspan="5"><div class="empty">No sales in this range yet</div></td></tr>`;
+}
+function setRange(start,end,label){
+  state.start=start;state.end=end;state.label=label;
+  document.getElementById("rangeLabel").textContent = (start.getTime()===end.getTime())
+    ? fmtFull(start) : (fmtShort(start)+" – "+fmtShort(end)+" "+end.getFullYear());
+  [...document.querySelectorAll(".preset")].forEach(p=>p.classList.toggle("active",p.dataset.label===label));
+  render();
+}
+
+// listings snapshot
+document.getElementById("lDep").innerHTML = LISTINGS.depopLive!=null?LISTINGS.depopLive:"&mdash;";
+document.getElementById("lVin").innerHTML = LISTINGS.vintedLive!=null?LISTINGS.vintedLive:"&mdash;";
+document.getElementById("lTot").innerHTML = LISTINGS.total!=null?LISTINGS.total:"&mdash;";
+document.getElementById("lCap").textContent = LISTINGS.capturedAt? ("as of "+LISTINGS.capturedAt) : "updated on next refresh";
+
+// build presets UI
+const pc=document.getElementById("presets");
+PRESETS.forEach(([label,fn])=>{const b=document.createElement("button");b.className="preset";b.dataset.label=label;b.textContent=label;
+  b.onclick=()=>{const [s,e]=fn();document.getElementById("rangePanel").classList.add("hidden");setRange(s,e,label);};pc.appendChild(b);});
+const btn=document.getElementById("rangeBtn"),panel=document.getElementById("rangePanel");
+btn.onclick=e=>{e.stopPropagation();panel.classList.toggle("hidden");};
+document.addEventListener("click",e=>{if(!panel.contains(e.target)&&e.target!==btn)panel.classList.add("hidden");});
+document.getElementById("cmp").onchange=e=>{state.compare=e.target.checked;render();};
+document.getElementById("applyBtn").onclick=()=>{
+  const f=document.getElementById("cFrom").value,t=document.getElementById("cTo").value;
+  if(!f||!t)return; let s=pd(f),en=pd(t); if(s>en){const tmp=s;s=en;en=tmp;}
+  panel.classList.add("hidden"); setRange(s,en,"Custom");
+};
+document.getElementById("cFrom").value=iso(today);
+document.getElementById("cTo").value=iso(today);
+
+document.getElementById("foot").innerHTML =
+  SALES.length+" sales tracked &middot; data store: fm_sales.csv &middot; generated "+GENERATED_AT+
+  " &middot; refreshes from Crosslist at 8am, 3pm, 8pm &amp; midnight";
+
+setRange(today,today,"Today");
+</script>
+</body>
+</html>

@@ -1,0 +1,68 @@
+name: FM Sales Tracker
+
+on:
+  schedule:
+    # Times are UTC. BST = UTC+1, so these fire ~08:00 / 15:00 / 20:00 / 00:00 BST.
+    - cron: "0 7 * * *"
+    - cron: "0 14 * * *"
+    - cron: "0 19 * * *"
+    - cron: "0 23 * * *"
+  workflow_dispatch: {}   # adds a "Run workflow" button for manual / test runs
+
+# Allow the job to commit state back and deploy Pages.
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+# Never run two pipeline jobs at once (avoids CSV write races).
+concurrency:
+  group: fm-sales-tracker
+  cancel-in-progress: false
+
+jobs:
+  track:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Ingest new sale emails
+        env:
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+        run: python3 ingest.py
+
+      - name: Rebuild dashboard + widget feed
+        run: python3 build_dashboard.py
+
+      - name: Commit updated data store
+        run: |
+          git config user.name  "FM Sales Bot"
+          git config user.email "fm-bot@users.noreply.github.com"
+          git add fm_sales.csv processed_ids.json collisions.csv 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "No data changes to commit."
+          else
+            git commit -m "data: $(date -u '+%Y-%m-%d %H:%M') run"
+            git push
+          fi
+
+      - name: Assemble Pages site
+        run: |
+          mkdir -p site
+          cp FM_Sales_Dashboard.html site/index.html
+          cp summary.json site/summary.json
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4
