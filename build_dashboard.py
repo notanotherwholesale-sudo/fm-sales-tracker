@@ -31,6 +31,10 @@ def load_sales():
                 price = float(price)
             except ValueError:
                 price = 0.0
+            try:
+                fee = round(float(str(r.get("fee", "0") or "0").replace("\u00a3", "").strip()), 2)
+            except ValueError:
+                fee = 0.0
             rows.append({
                 "date": r["date"].strip(),
                 "time": (r.get("time") or "").strip(),
@@ -38,6 +42,7 @@ def load_sales():
                 "title": (r.get("title") or r.get("sku") or "").strip(),
                 "platform": (r.get("platform") or "").strip(),
                 "price": price,
+                "fee": fee,
             })
     return rows
 
@@ -162,6 +167,28 @@ TEMPLATE = """<!DOCTYPE html>
 </style>
 </head>
 <body>
+<div id="fmGate" style="position:fixed;inset:0;z-index:99999;background:#0b0f1a;display:flex;align-items:center;justify-content:center">
+  <div style="text-align:center;font-family:system-ui,sans-serif;color:#e5e7eb">
+    <div style="font-size:18px;margin-bottom:14px">FM Sales &middot; enter password</div>
+    <input id="fmPw" type="password" autofocus style="padding:10px 12px;border-radius:8px;border:1px solid #334155;background:#111827;color:#fff;font-size:15px">
+    <button id="fmGo" style="margin-left:8px;padding:10px 16px;border-radius:8px;border:0;background:#6366f1;color:#fff;font-size:15px;cursor:pointer">Unlock</button>
+    <div id="fmErr" style="color:#f87171;height:18px;margin-top:10px;font-size:13px"></div>
+  </div>
+</div>
+<script>
+(function(){
+  var H="__PW_HASH__", g=document.getElementById('fmGate');
+  if(!H){ g.remove(); return; }                                  // no password set -> open
+  if(localStorage.getItem('fmUnlocked')===H){ g.remove(); return; }
+  async function sha(s){var b=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(s));
+    return Array.from(new Uint8Array(b)).map(function(x){return x.toString(16).padStart(2,'0')}).join('');}
+  async function go(){var h=await sha(document.getElementById('fmPw').value);
+    if(h===H){localStorage.setItem('fmUnlocked',H); g.remove();}
+    else{document.getElementById('fmErr').textContent='Wrong password';}}
+  document.getElementById('fmGo').onclick=go;
+  document.getElementById('fmPw').addEventListener('keydown',function(e){if(e.key==='Enter')go();});
+})();
+</script>
 <header>
   <h1><span class="logo"></span>FM <span class="g">Sales Dashboard</span></h1>
   <div class="rangewrap">
@@ -178,7 +205,7 @@ TEMPLATE = """<!DOCTYPE html>
   </div>
 </header>
 <div class="legend">
-  Depop &amp; Vinted &middot; auto-generated from Crosslist
+  Depop &amp; Vinted &middot; auto-generated from sale emails
   <span class="pill"><span class="dot" style="background:var(--depop)"></span>Depop</span>
   <span class="pill"><span class="dot" style="background:var(--vinted)"></span>Vinted</span>
   <span class="pill"><span class="dot" style="background:#f97316"></span>Wholesale</span>
@@ -273,13 +300,13 @@ const PRESETS=[
 let state={start:today,end:today,label:"Today",compare:false};
 
 function aggregate(start,end){
-  let rev=0,u=0,dR=0,dU=0,vR=0,vU=0,wR=0,wU=0;
+  let rev=0,u=0,dR=0,dU=0,vR=0,vU=0,wR=0,wU=0,fee=0;
   for(const s of SALES){const d=pd(s.date); if(d<start||d>end) continue;
-    rev+=s.price;u++;
+    rev+=s.price;u++;fee+=(s.fee||0);
     if(s.platform==="Depop"){dR+=s.price;dU++;}
     else if(s.platform==="Wholesale"){wR+=s.price;wU++;}
     else {vR+=s.price;vU++;}}
-  return {rev,u,dR,dU,vR,vU,wR,wU,avg:u?rev/u:0};
+  return {rev,u,dR,dU,vR,vU,wR,wU,fee,net:rev-fee,avg:u?rev/u:0};
 }
 function setDelta(el,cur,prev){
   if(!state.compare){el.className="delta hide";return;}
@@ -315,8 +342,7 @@ function render(){
   document.getElementById("kVinU").textContent=cur.vU+" unit"+(cur.vU===1?"":"s");
   document.getElementById("kWhRev").textContent=gbp(cur.wR);
   document.getElementById("kWhU").textContent=cur.wU+" unit"+(cur.wU===1?"":"s");
-  const sub = state.compare ? ("vs "+gbp(prev.rev)+" prev") : ("in "+state.label.toLowerCase());
-  document.getElementById("sRev").textContent=sub;
+  document.getElementById("sRev").textContent=gbp(cur.net)+" net after fees";
   document.getElementById("sU").textContent=state.compare?("vs "+prev.u+" prev"):("in "+state.label.toLowerCase());
   setDelta(document.getElementById("dRev"),cur.rev,prev.rev);
   setDelta(document.getElementById("dU"),cur.u,prev.u);
@@ -379,8 +405,8 @@ document.getElementById("cFrom").value=iso(today);
 document.getElementById("cTo").value=iso(today);
 
 document.getElementById("foot").innerHTML =
-  SALES.length+" sales tracked &middot; data store: fm_sales.csv &middot; generated "+GENERATED_AT+
-  " &middot; refreshes from Crosslist at 8am, 3pm, 8pm &amp; midnight";
+  SALES.length+" sales tracked &middot; generated "+GENERATED_AT+
+  " &middot; auto-updates from Depop &amp; Vinted sale emails every few minutes";
 
 setRange(today,today,"Today");
 </script>
@@ -390,6 +416,7 @@ setRange(today,today,"Today");
 
 def _agg(sales, start, end):
     dR = dU = vR = vU = wR = wU = 0
+    fee = 0.0
     for s in sales:
         try:
             y, m, d = map(int, s["date"].split("-"))
@@ -398,13 +425,16 @@ def _agg(sales, start, end):
             continue
         if sd < start or sd > end:
             continue
+        fee += s.get("fee", 0) or 0
         if s["platform"] == "Depop":
             dR += s["price"]; dU += 1
         elif s["platform"] == "Wholesale":
             wR += s["price"]; wU += 1
         else:
             vR += s["price"]; vU += 1
-    return {"rev": round(dR + vR + wR, 2), "u": dU + vU + wU,
+    rev = round(dR + vR + wR, 2)
+    return {"rev": rev, "u": dU + vU + wU,
+            "fee": round(fee, 2), "net": round(rev - fee, 2),
             "depop": {"rev": round(dR, 2), "u": dU},
             "vinted": {"rev": round(vR, 2), "u": vU},
             "wholesale": {"rev": round(wR, 2), "u": wU}}
@@ -448,7 +478,11 @@ def main():
             .replace("__IC_BOX__", IC_BOX)
             .replace("__SALES_JSON__", json.dumps(sales))
             .replace("__LISTINGS_JSON__", json.dumps(listings))
-            .replace("__GENERATED_AT__", gen))
+            .replace("__GENERATED_AT__", gen)
+            # Client-side password gate. Set the DASH_PW_SHA256 env var (SHA-256 of the
+            # password) to enable it; unset = open dashboard. It's a casual-visitor lock,
+            # not bank-grade (public static page), as chosen.
+            .replace("__PW_HASH__", os.environ.get("DASH_PW_SHA256", "")))
     with open(OUT_PATH, "w") as f:
         f.write(html)
     summary = compute_summary(sales, listings, gen)

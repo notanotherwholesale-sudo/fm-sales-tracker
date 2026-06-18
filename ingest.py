@@ -38,7 +38,7 @@ DELIST_FIELDS = ["detected_at", "sold_date", "sold_time", "sku", "title",
                  "sold_on", "delist_from", "status"]
 
 IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
-FIELDS = ["date", "time", "sku", "title", "platform", "price"]
+FIELDS = ["date", "time", "sku", "title", "platform", "price", "fee"]
 
 # --------------------------------------------------------------------------- #
 # Email -> sale parsing
@@ -99,7 +99,9 @@ def parse_depop(subject, body, sent_dt):
     if not title or price is None:
         raise ParseError("Depop sale confirmation but couldn't extract title/price")
     title = re.sub(r"\.{2,}$", "", title.strip()).strip()   # drop trailing '...'
-    return _row(sent_dt.strftime("%Y-%m-%d"), sent_dt.strftime("%H:%M"), title, "Depop", price)
+    fm = re.search(r"[Pp]ayment processing fee.*?[−-]\s*£\s*([\d.,]+)", body, re.S)
+    fee = _money(fm.group(1)) if fm else 0.0
+    return _row(sent_dt.strftime("%Y-%m-%d"), sent_dt.strftime("%H:%M"), title, "Depop", price, fee=fee)
 
 
 def parse_vinted(subject, body, sent_dt):
@@ -133,10 +135,11 @@ def _first(text, patterns):
     return None
 
 
-def _row(date, time, title, platform, price):
+def _row(date, time, title, platform, price, fee=0.0):
     return {
         "date": date, "time": time, "sku": _sku_from_title(title),
         "title": title.strip(), "platform": platform, "price": round(float(price), 2),
+        "fee": round(float(fee or 0.0), 2),   # platform fee (Depop processing fee; Vinted=0)
     }
 
 
