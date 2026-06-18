@@ -42,7 +42,11 @@ jobs:
         run: |
           git config user.name  "FM Sales Bot"
           git config user.email "fm-bot@users.noreply.github.com"
-          git add fm_sales.csv processed_ids.json collisions.csv delist_queue.csv 2>/dev/null || true
+          # Stage each file individually — a missing one (e.g. no delist queue yet) must
+          # NOT abort `git add` and silently stage nothing (that once dropped real data).
+          for f in fm_sales.csv processed_ids.json processed_reversals.json collisions.csv delist_queue.csv; do
+            [ -f "$f" ] && git add "$f"
+          done
           if git diff --cached --quiet; then
             echo "No data changes to commit."
           else

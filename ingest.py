@@ -28,6 +28,7 @@ except Exception:
 FOLDER = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(FOLDER, "fm_sales.csv")
 PROCESSED_PATH = os.path.join(FOLDER, "processed_ids.json")
+PROCESSED_REVERSALS_PATH = os.path.join(FOLDER, "processed_reversals.json")
 COLLISIONS_PATH = os.path.join(FOLDER, "collisions.csv")
 # Hand-off to the FM Auto-Delister: each new sale -> which platform to delist (the
 # opposite of where it sold). The tracker only *signals*; the delister keeps every
@@ -373,6 +374,19 @@ def save_processed(ids):
     json.dump(sorted(ids), open(PROCESSED_PATH, "w"), indent=0)
 
 
+def load_processed_reversals():
+    if os.path.exists(PROCESSED_REVERSALS_PATH):
+        try:
+            return set(json.load(open(PROCESSED_REVERSALS_PATH)))
+        except Exception:
+            pass
+    return set()
+
+
+def save_processed_reversals(ids):
+    json.dump(sorted(i for i in ids if i), open(PROCESSED_REVERSALS_PATH, "w"), indent=0)
+
+
 # --------------------------------------------------------------------------- #
 # Reversals (cancellations / failed-delivery returns) — remove revenue that fell through
 # --------------------------------------------------------------------------- #
@@ -420,7 +434,7 @@ def scan_reversals(M, since_date=None):
             ds = "9999-12-31"
         out.append({"sku": _sku_from_title(item),
                     "title": re.sub(r"\s+", " ", item.lower()).strip(),
-                    "date": ds})
+                    "date": ds, "mid": msg.get("Message-ID", "")})
     return out
 
 
@@ -433,6 +447,14 @@ def remove_reversed(reversals):
     rows = load_rows()
     remove_idx = set()
     for rev in reversals:
+        # A cancellation lands within weeks of the sale, never months. Bounding the match
+        # to a 45-day window stops a re-seen reversal from grabbing an unrelated, much
+        # older same-title sale (the no-SKU mis-match class of bug).
+        try:
+            rev_dt = datetime.datetime.strptime(rev["date"], "%Y-%m-%d")
+            floor = (rev_dt - datetime.timedelta(days=45)).strftime("%Y-%m-%d")
+        except Exception:
+            floor = "0000-00-00"
         best = None
         for i, r in enumerate(rows):
             if i in remove_idx or r.get("platform") != "Vinted":
@@ -441,7 +463,7 @@ def remove_reversed(reversals):
             rtitle = re.sub(r"\s+", " ", (r.get("title") or "").lower()).strip()
             match = (rev["sku"] and rsku == rev["sku"]) or \
                     (not rev["sku"] and rtitle.startswith(rev["title"][:18]))
-            if match and r.get("date", "") <= rev["date"]:
+            if match and floor <= r.get("date", "") <= rev["date"]:
                 if best is None or (r.get("date", ""), r.get("time", "")) > \
                         (rows[best].get("date", ""), rows[best].get("time", "")):
                     best = i
@@ -501,15 +523,21 @@ def run():
     # cancellations aren't time-critical, so only run it ~hourly to keep the frequent
     # 15-min passes fast. FORCE_REVERSALS=1 overrides (used by the daily deep run).
     do_rev = os.environ.get("FORCE_REVERSALS") == "1" or datetime.datetime.now().minute < 15
-    reversals = []
+    scanned_revs = []
     if do_rev:
         # Look back ~35 days for cancellations — they can land days after the sale.
         rev_since = (wm - datetime.timedelta(days=35)) if wm else None
         try:
-            reversals = scan_reversals(M, since_date=rev_since)
+            scanned_revs = scan_reversals(M, since_date=rev_since)
         except Exception as e:
             print(f"  ! reversal scan skipped (non-fatal): {e}")
     M.logout()
+
+    # Act on each cancellation email exactly ONCE — re-processing an already-handled
+    # reversal is what caused it to grab the wrong same-title sale. Historical reversals
+    # were seeded into processed_reversals.json, so only genuinely-new ones act here.
+    seen_revs = load_processed_reversals()
+    reversals = [r for r in scanned_revs if r.get("mid") and r["mid"] not in seen_revs]
 
     new_rows, parsed_ids, skipped, pre_wm = [], set(), 0, 0
     for msg in msgs:
@@ -551,6 +579,8 @@ def run():
     for r in removed:
         print(f"  - reversed (cancelled/returned): {r['date']} {r.get('time','')} "
               f"£{r['price']} {r['title']}")
+    if scanned_revs:   # mark every scanned cancellation handled, matched or not
+        save_processed_reversals(seen_revs | {r["mid"] for r in scanned_revs})
     collisions = report_collisions(load_rows())
 
     print(f"emails scanned: {len(msgs)} | parsed: {len(new_rows)} | "
