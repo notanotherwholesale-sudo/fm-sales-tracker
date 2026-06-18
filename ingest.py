@@ -29,6 +29,7 @@ FOLDER = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(FOLDER, "fm_sales.csv")
 PROCESSED_PATH = os.path.join(FOLDER, "processed_ids.json")
 PROCESSED_REVERSALS_PATH = os.path.join(FOLDER, "processed_reversals.json")
+REVERSAL_STATE_PATH = os.path.join(FOLDER, "reversal_state.json")
 COLLISIONS_PATH = os.path.join(FOLDER, "collisions.csv")
 # Hand-off to the FM Auto-Delister: each new sale -> which platform to delist (the
 # opposite of where it sold). The tracker only *signals*; the delister keeps every
@@ -390,6 +391,17 @@ def save_processed_reversals(ids):
     json.dump(sorted(i for i in ids if i), open(PROCESSED_REVERSALS_PATH, "w"), indent=0)
 
 
+def _last_reversal_sweep():
+    try:
+        return datetime.datetime.fromisoformat(json.load(open(REVERSAL_STATE_PATH))["last_sweep"])
+    except Exception:
+        return None
+
+
+def _mark_reversal_sweep(dt):
+    json.dump({"last_sweep": dt.isoformat()}, open(REVERSAL_STATE_PATH, "w"))
+
+
 # --------------------------------------------------------------------------- #
 # Reversals (cancellations / failed-delivery returns) — remove revenue that fell through
 # --------------------------------------------------------------------------- #
@@ -525,10 +537,12 @@ def run():
     # The cancellation sweep is the heavy part (it fetches candidate emails), and
     # cancellations aren't time-critical, so only run it ~hourly to keep the frequent
     # 15-min passes fast. FORCE_REVERSALS=1 overrides (used by the daily deep run).
-    # Cancellations aren't time-critical and the sweep is the costly part, so run it 4×/day
-    # (hours 1/7/13/19) — keeps the frequent passes to ~1 billed minute each.
+    # Sweep cancellations at most every ~3h, tracked by wall-clock not by run cadence —
+    # so it works whether the cron fires every 5 min or sporadically once an hour.
     _now = datetime.datetime.now()
-    do_rev = os.environ.get("FORCE_REVERSALS") == "1" or (_now.hour % 6 == 1 and _now.minute < 5)
+    _last = _last_reversal_sweep()
+    do_rev = (os.environ.get("FORCE_REVERSALS") == "1" or _last is None
+              or (_now - _last) >= datetime.timedelta(hours=3))
     scanned_revs = []
     if do_rev:
         # Look back ~35 days for cancellations — they can land days after the sale.
@@ -585,6 +599,8 @@ def run():
     for r in removed:
         print(f"  - reversed (cancelled/returned): {r['date']} {r.get('time','')} "
               f"£{r['price']} {r['title']}")
+    if do_rev:         # record the sweep time so the next ~3h of runs skip it
+        _mark_reversal_sweep(_now)
     if scanned_revs:   # mark every scanned cancellation handled, matched or not
         save_processed_reversals(seen_revs | {r["mid"] for r in scanned_revs})
     collisions = report_collisions(load_rows())
