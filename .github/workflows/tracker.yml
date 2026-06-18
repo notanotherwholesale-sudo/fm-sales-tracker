@@ -2,18 +2,19 @@ name: FM Sales Tracker
 
 on:
   schedule:
-    # Times are UTC. BST = UTC+1, so these fire ~08:00 / 15:00 / 20:00 / 00:00 BST.
-    - cron: "0 7 * * *"
-    - cron: "0 14 * * *"
-    - cron: "0 19 * * *"
-    - cron: "0 23 * * *"
-  workflow_dispatch: {}   # adds a "Run workflow" button for manual / test runs
+    - cron: "*/15 * * * *"   # every 15 min — as close to live as a private-repo cron gets
+  workflow_dispatch:
+    inputs:
+      force_reversals:
+        description: "Run the full cancellation sweep this run"
+        type: boolean
+        default: false
 
 # Allow the job to commit the data store back to this (private) repo.
 permissions:
   contents: write
 
-# Never run two pipeline jobs at once (avoids CSV write races).
+# Never run two pipeline jobs at once (avoids CSV write races); let an in-flight run finish.
 concurrency:
   group: fm-sales-tracker
   cancel-in-progress: false
@@ -21,17 +22,17 @@ concurrency:
 jobs:
   track:
     runs-on: ubuntu-latest
+    timeout-minutes: 10          # bound worst-case runtime (protects the Actions-minutes budget)
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Ingest new sale emails
+      # Use the runner's built-in Python 3 (stdlib-only code) — no setup step needed, faster runs.
+      - name: Ingest new sale emails  (never fails the job)
+        continue-on-error: true
         env:
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          FORCE_REVERSALS: ${{ inputs.force_reversals && '1' || '' }}
         run: python3 ingest.py
 
       - name: Rebuild dashboard + widget feed
@@ -41,7 +42,7 @@ jobs:
         run: |
           git config user.name  "FM Sales Bot"
           git config user.email "fm-bot@users.noreply.github.com"
-          git add fm_sales.csv processed_ids.json collisions.csv 2>/dev/null || true
+          git add fm_sales.csv processed_ids.json collisions.csv delist_queue.csv 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "No data changes to commit."
           else

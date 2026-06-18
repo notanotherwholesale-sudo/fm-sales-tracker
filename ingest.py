@@ -29,6 +29,12 @@ FOLDER = os.path.dirname(os.path.abspath(__file__))
 CSV_PATH = os.path.join(FOLDER, "fm_sales.csv")
 PROCESSED_PATH = os.path.join(FOLDER, "processed_ids.json")
 COLLISIONS_PATH = os.path.join(FOLDER, "collisions.csv")
+# Hand-off to the FM Auto-Delister: each new sale -> which platform to delist (the
+# opposite of where it sold). The tracker only *signals*; the delister keeps every
+# destructive safety rule (both-active check, dry-run, etc.). See DELISTER_SYNC.md.
+DELIST_QUEUE_PATH = os.path.join(FOLDER, "delist_queue.csv")
+DELIST_FIELDS = ["detected_at", "sold_date", "sold_time", "sku", "title",
+                 "sold_on", "delist_from", "status"]
 
 IMAP_HOST = os.environ.get("IMAP_HOST", "imap.gmail.com")
 FIELDS = ["date", "time", "sku", "title", "platform", "price"]
@@ -200,13 +206,13 @@ def connect():
     user = os.environ.get("GMAIL_USER")
     pw = os.environ.get("GMAIL_APP_PASSWORD")
     if not user or not pw:
-        sys.exit("ERROR: set GMAIL_USER and GMAIL_APP_PASSWORD (app password, not your login password).")
+        raise RuntimeError("set GMAIL_USER and GMAIL_APP_PASSWORD (app password, not your login password).")
     M = imaplib.IMAP4_SSL(IMAP_HOST)
     M.login(user, pw)
     typ, _ = M.select('"[Gmail]/All Mail"', readonly=True)
     if typ != "OK":
         M.logout()
-        sys.exit("ERROR: could not open the Gmail mailbox (is IMAP enabled in Gmail settings?).")
+        raise RuntimeError("could not open the Gmail mailbox (is IMAP enabled in Gmail settings?).")
     return M
 
 
@@ -313,6 +319,47 @@ def report_collisions(all_rows):
     return collisions
 
 
+def enqueue_delists(added):
+    """Append newly-detected sales to the delist queue so the FM Auto-Delister can
+    remove the still-live duplicate on the OPPOSITE platform. Idempotent: skips a
+    (sold_on, sku/title, date) we've already queued."""
+    if not added:
+        return 0
+    existing = set()
+    if os.path.exists(DELIST_QUEUE_PATH):
+        with open(DELIST_QUEUE_PATH, newline="") as f:
+            for r in csv.DictReader(f):
+                existing.add((r.get("sold_on"), r.get("sku"),
+                              re.sub(r"\s+", " ", (r.get("title") or "").lower()).strip(),
+                              r.get("sold_date")))
+    opp = {"Depop": "Vinted", "Vinted": "Depop"}
+    now = datetime.datetime.now(LONDON).strftime("%Y-%m-%d %H:%M") if LONDON \
+        else datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+    queued = []
+    for r in added:
+        plat = r.get("platform")
+        if plat not in opp:          # Wholesale / manual — nothing to cross-delist
+            continue
+        key = (plat, r.get("sku", ""),
+               re.sub(r"\s+", " ", (r.get("title") or "").lower()).strip(), r.get("date"))
+        if key in existing:
+            continue
+        existing.add(key)
+        queued.append({"detected_at": now, "sold_date": r.get("date", ""),
+                       "sold_time": r.get("time", ""), "sku": r.get("sku", ""),
+                       "title": r.get("title", ""), "sold_on": plat,
+                       "delist_from": opp[plat], "status": "pending"})
+    if queued:
+        write_header = not os.path.exists(DELIST_QUEUE_PATH) or os.path.getsize(DELIST_QUEUE_PATH) == 0
+        with open(DELIST_QUEUE_PATH, "a", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=DELIST_FIELDS)
+            if write_header:
+                w.writeheader()
+            for q in queued:
+                w.writerow(q)
+    return len(queued)
+
+
 def load_processed():
     if os.path.exists(PROCESSED_PATH):
         try:
@@ -340,9 +387,14 @@ def scan_reversals(M, since_date=None):
     search so we only fetch the few matching emails, not the whole archive."""
     crit = ["SINCE", since_date.strftime("%d-%b-%Y")] if since_date else []
     ids = set()
-    for phrase in REVERSAL_PHRASES:
+    # IMAP TEXT search can't take a multi-word phrase unquoted, so anchor on single
+    # tokens and confirm the full phrase in the body below.
+    # Real reversals are all "Order update for …" emails — narrowing by subject keeps
+    # this to ~100 candidates instead of every shipping-label email that says "cancelled".
+    for term in ("cancelled", "returned"):
         try:
-            typ, data = M.search(None, "FROM", "vinted", *crit, "TEXT", phrase)
+            typ, data = M.search(None, "FROM", "vinted", "SUBJECT", '"Order update"',
+                                 *crit, "TEXT", term)
             if typ == "OK" and data and data[0]:
                 ids |= set(data[0].split())
         except Exception:
@@ -395,6 +447,12 @@ def remove_reversed(reversals):
                     best = i
         if best is not None:
             remove_idx.add(best)
+    # Safety valve: a correct run removes at most a handful. If something matched a
+    # huge number, treat it as a bug and refuse to mass-delete — never silently nuke data.
+    if len(remove_idx) > 25:
+        print(f"  !! reversal removal aborted: {len(remove_idx)} matches looks wrong "
+              f"(cap 25). No rows removed; investigate.")
+        return []
     if remove_idx:
         kept = [r for i, r in enumerate(rows) if i not in remove_idx]
         with open(CSV_PATH, "w", newline="") as f:
@@ -439,9 +497,18 @@ def run():
 
     M = connect()
     msgs = fetch_messages(M, since_date=since)
-    # Look back ~35 days for cancellations — they can land days after the sale.
-    rev_since = (wm - datetime.timedelta(days=35)) if wm else None
-    reversals = scan_reversals(M, since_date=rev_since)
+    # The cancellation sweep is the heavy part (it fetches candidate emails), and
+    # cancellations aren't time-critical, so only run it ~hourly to keep the frequent
+    # 15-min passes fast. FORCE_REVERSALS=1 overrides (used by the daily deep run).
+    do_rev = os.environ.get("FORCE_REVERSALS") == "1" or datetime.datetime.now().minute < 15
+    reversals = []
+    if do_rev:
+        # Look back ~35 days for cancellations — they can land days after the sale.
+        rev_since = (wm - datetime.timedelta(days=35)) if wm else None
+        try:
+            reversals = scan_reversals(M, since_date=rev_since)
+        except Exception as e:
+            print(f"  ! reversal scan skipped (non-fatal): {e}")
     M.logout()
 
     new_rows, parsed_ids, skipped, pre_wm = [], set(), 0, 0
@@ -477,6 +544,9 @@ def run():
     added = append_rows(existing, new_rows)
     if parsed_ids:
         save_processed(processed | parsed_ids)
+    queued = enqueue_delists(added)
+    if queued:
+        print(f"  -> queued {queued} item(s) for the auto-delister (delist_queue.csv)")
     removed = remove_reversed(reversals)
     for r in removed:
         print(f"  - reversed (cancelled/returned): {r['date']} {r.get('time','')} "
@@ -495,4 +565,14 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--dump":
         dump(int(sys.argv[2]) if len(sys.argv) > 2 else 5)
     else:
-        run()
+        # Never let an ingest hiccup (transient IMAP/network error) fail the job —
+        # the dashboard must always go on to rebuild + publish from existing data.
+        try:
+            run()
+        except SystemExit:
+            raise
+        except Exception as e:
+            import traceback
+            print(f"!! ingest error (non-fatal, dashboard still publishes): {e}")
+            traceback.print_exc()
+            sys.exit(0)
