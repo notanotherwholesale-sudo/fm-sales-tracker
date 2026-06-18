@@ -525,7 +525,7 @@ def run():
     # Cancellations aren't time-critical and the sweep is the costly part, so run it 4×/day
     # (hours 1/7/13/19) — keeps the frequent passes to ~1 billed minute each.
     _now = datetime.datetime.now()
-    do_rev = os.environ.get("FORCE_REVERSALS") == "1" or (_now.hour % 6 == 1 and _now.minute < 30)
+    do_rev = os.environ.get("FORCE_REVERSALS") == "1" or (_now.hour % 6 == 1 and _now.minute < 5)
     scanned_revs = []
     if do_rev:
         # Look back ~35 days for cancellations — they can land days after the sale.

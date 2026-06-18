@@ -2,12 +2,9 @@ name: FM Sales Tracker
 
 on:
   schedule:
-    # Every 30 min at :07 / :37 — deliberately OFF the hour. GitHub heavily delays/drops
-    # crons scheduled at :00 and :30 (peak load), so off-peak minutes fire far more reliably.
-    # GitHub bills each run as >=1 min; 48 runs/day keeps a private repo safely inside the
-    # 2,000-min/month free budget (~1,600 used). Tighter cadence needs a public repo
-    # (unlimited Actions minutes) — see README. Don't drop below ~25 min here.
-    - cron: "7,37 * * * *"
+    # Every 5 min — near-live. Viable because the repo is PUBLIC (unlimited Actions
+    # minutes; public repos are also far less throttled than private on schedules).
+    - cron: "*/5 * * * *"
   workflow_dispatch:
     inputs:
       force_reversals:
